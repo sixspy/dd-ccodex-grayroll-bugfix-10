@@ -24,6 +24,7 @@ class PublishIn(BaseModel):
     cohort_id: int | None = None
     summary: str
     use_shadow: bool = False
+    cross_region: bool = False
 
 
 @router.get("")
@@ -57,6 +58,8 @@ def publish(body: PublishIn, authorization: str | None = Header(default=None)):
     kind = require_rule_kind(body.kind)
     pct = require_percent(body.percent)
     summary = require_str(body.summary, "发布说明", 4)
+    if body.cross_region and body.use_shadow:
+        raise HTTPException(400, detail="跨区放量只走甲路径正式写，不开影子折中")
     key = f"flag-release:{fid}:{eid}"
     with connect() as conn:
         acquire(conn, key, user["username"])
@@ -66,8 +69,24 @@ def publish(body: PublishIn, authorization: str | None = Header(default=None)):
                 raise HTTPException(404, detail="开关不存在")
             assert_flag_publishable(fl["status"])
             assert_not_killed_or_allow_kill(fl["status"])
-            if not conn.execute("SELECT 1 FROM environments WHERE id=?", (eid,)).fetchone():
+            env = conn.execute(
+                """
+                SELECT e.id, e.timezone, cr.eligible AS cr_eligible
+                FROM environments e
+                LEFT JOIN env_cross_region cr ON cr.env_id=e.id AND cr.official=1
+                WHERE e.id=?
+                """,
+                (eid,),
+            ).fetchone()
+            if not env:
                 raise HTTPException(404, detail="环境不存在")
+            if body.cross_region:
+                # 甲路径同事务跨表联查：缺时区或无正式资格 ⇒ 跨区放量拒写
+                tz = (env["timezone"] or "").strip()
+                if not tz or not env["cr_eligible"]:
+                    raise HTTPException(
+                        409, detail="环境缺时区或未授予跨区资格：拒绝跨区放量（甲路径零增拒写）"
+                    )
             if body.cohort_id and not conn.execute(
                 "SELECT 1 FROM cohorts WHERE id=?", (body.cohort_id,)
             ).fetchone():
@@ -104,10 +123,11 @@ def publish(body: PublishIn, authorization: str | None = Header(default=None)):
             rid = cur.lastrowid
             if fl["status"] in ("draft", "killed"):
                 conn.execute("UPDATE flags SET status='active' WHERE id=?", (fid,))
-            write_audit(conn, user["username"], "publish", "release", rid, describe_path("release", False))
-            write_history(conn, user["username"], "publish", f"v{ver} {summary}", flag_id=fid, env_id=eid)
+            tag = "【跨区】" if body.cross_region else ""
+            write_audit(conn, user["username"], "publish", "release", rid, describe_path("release", False) + tag)
+            write_history(conn, user["username"], "publish", f"{tag}v{ver} {summary}", flag_id=fid, env_id=eid)
             conn.commit()
-            return {"mode": "official", "id": rid, "version": ver, "path": describe_path("release", False)}
+            return {"mode": "official", "id": rid, "version": ver, "cross_region": body.cross_region, "path": describe_path("release", False)}
         finally:
             release(conn, key, user["username"])
             conn.commit()

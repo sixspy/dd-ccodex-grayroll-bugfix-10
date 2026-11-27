@@ -2,15 +2,16 @@ import { api } from "../api.js";
 const { ref, onMounted } = Vue;
 export const ReleasesView = {
   setup() {
-    const official = ref([]); const shadows = ref([]);
+    const official = ref([]); const shadows = ref([]); const envs = ref([]);
     const form = ref({
       flag_id: 3, env_id: 1, kind: "percent", percent: 30, cohort_id: null,
-      summary: "开发环境三成灰度试跑", use_shadow: false,
+      summary: "开发环境三成灰度试跑", use_shadow: false, cross_region: false,
     });
     const err = ref(""); const msg = ref("");
     async function reload() {
       const res = await api("/api/releases");
       official.value = res.official || []; shadows.value = res.shadows || [];
+      envs.value = (await api("/api/envs")).items || [];
     }
     async function publish() {
       err.value = ""; msg.value = "";
@@ -26,10 +27,24 @@ export const ReleasesView = {
       catch (e) { err.value = e.message || String(e); }
     }
     onMounted(reload);
-    return { official, shadows, form, err, msg, publish, promote, reload };
+    return { official, shadows, envs, form, err, msg, publish, promote, reload };
   },
   template: `
   <div class="grid">
+    <div class="panel span-12">
+      <h2>跨区放量面板</h2>
+      <p class="hint">资格以环境服务正式账为准：缺时区 ⇒ 不可跨区；勾选跨区放量的发布由后端同事务联查拒写兜底。</p>
+      <table>
+        <thead><tr><th>环境</th><th>名称</th><th>时区</th><th>跨区资格</th></tr></thead>
+        <tbody>
+          <tr v-for="e in envs" :key="e.id">
+            <td>{{ e.code }}</td><td>{{ e.title }}</td>
+            <td><code>{{ e.timezone || "（空）" }}</code></td>
+            <td><span class="pill" :class="e.cross_region ? '' : (e.tz_calibrated ? 'warn' : 'danger')">{{ e.cross_region ? "可跨区" : (e.tz_calibrated ? "未授予" : "缺时区") }}</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
     <div class="panel span-5">
       <h2>发布生效</h2>
       <p class="hint">默认甲路径：同事务写正式配置并升版本。勾选影子则走乙路径。</p>
@@ -40,6 +55,7 @@ export const ReleasesView = {
       </div>
       <div class="field"><label>比例</label><input type="number" v-model.number="form.percent" /></div>
       <div class="field"><label>说明</label><textarea v-model="form.summary" rows="2"></textarea></div>
+      <div class="field"><label><input type="checkbox" v-model="form.cross_region" /> 跨区放量（须环境已授跨区资格）</label></div>
       <div class="field"><label><input type="checkbox" v-model="form.use_shadow" /> 使用影子草案</label></div>
       <button class="btn" @click="publish">提交发布</button>
       <p class="muted" v-if="msg">{{ msg }}</p>

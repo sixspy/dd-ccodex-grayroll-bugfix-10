@@ -3,18 +3,21 @@
     "id": 1,
     "code": "dev",
     "title": "开发环境",
-    "risk_level": 1
+    "risk_level": 1,
+    "timezone": "Asia/Shanghai"
   },
   {
     "id": 2,
     "code": "staging",
     "title": "预发环境",
-    "risk_level": 2
+    "risk_level": 2,
+    "timezone": "Asia/Shanghai"
   },
   {
     "id": 3,
     "code": "prod",
     "title": "生产环境",
-    "risk_level": 3
+    "risk_level": 3,
+    "timezone": ""
   }
 ]

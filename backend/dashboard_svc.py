@@ -36,6 +36,21 @@ def dashboard(authorization: str | None = Header(default=None)):
                 "SELECT id, action, detail, actor, created_at FROM change_history ORDER BY id DESC LIMIT 8"
             ).fetchall()
         ]
+        # 缺时区环境账：排期对错钟的风险源，总览必须亮出
+        tz_missing = [
+            dict(r)
+            for r in conn.execute(
+                "SELECT id, code, title FROM environments WHERE TRIM(timezone)='' ORDER BY risk_level"
+            ).fetchall()
+        ]
+        # 生效可跨区 = 正式资格且时区在（联查账实，空时区不计入）
+        cross_region_envs = conn.execute(
+            """
+            SELECT COUNT(*) c FROM environments e
+            JOIN env_cross_region cr ON cr.env_id=e.id AND cr.official=1 AND cr.eligible=1
+            WHERE TRIM(e.timezone)<>''
+            """
+        ).fetchone()["c"]
     return {
         "flags": flags,
         "active": active,
@@ -45,4 +60,6 @@ def dashboard(authorization: str | None = Header(default=None)):
         "active_overrides": overrides,
         "by_status": by_status,
         "recent": recent,
+        "tz_missing": tz_missing,
+        "cross_region_envs": cross_region_envs,
     }

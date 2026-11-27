@@ -31,6 +31,13 @@ def evaluate(body: EvalIn, authorization: str | None = Header(default=None)):
         env = conn.execute("SELECT * FROM environments WHERE code=?", (env_code,)).fetchone()
         if not env:
             raise HTTPException(404, detail="环境不存在")
+        # 联查时区与正式跨区资格：缺时区 ⇒ 未校准且不可跨区（甲路径读模型）
+        tz_calibrated = bool((env["timezone"] or "").strip())
+        cr = conn.execute(
+            "SELECT eligible FROM env_cross_region WHERE env_id=? AND official=1", (env["id"],)
+        ).fetchone()
+        cross_region = bool(tz_calibrated and cr and cr["eligible"])
+        calib = {"tz_calibrated": tz_calibrated, "cross_region": cross_region}
         if fl["status"] == "killed":
             return {
                 "enabled": False,
@@ -38,6 +45,7 @@ def evaluate(body: EvalIn, authorization: str | None = Header(default=None)):
                 "flag_key": flag_key,
                 "env_code": env_code,
                 "subject_key": subject,
+                **calib,
             }
         if fl["status"] == "archived":
             return {
@@ -46,6 +54,7 @@ def evaluate(body: EvalIn, authorization: str | None = Header(default=None)):
                 "flag_key": flag_key,
                 "env_code": env_code,
                 "subject_key": subject,
+                **calib,
             }
         ov = conn.execute(
             "SELECT * FROM overrides WHERE flag_id=? AND env_id=? AND subject_key=? AND active=1",
@@ -60,20 +69,22 @@ def evaluate(body: EvalIn, authorization: str | None = Header(default=None)):
                 "env_code": env_code,
                 "subject_key": subject,
                 "version": None,
+                **calib,
             }
         rule = conn.execute(
             "SELECT * FROM flag_rules WHERE flag_id=? AND env_id=? AND official=1",
             (fl["id"], env["id"]),
         ).fetchone()
         if not rule:
-            # BUGFIX-10 埋雷：空规则仍暗示可放行假绿字段
+            # 无正式规则即未校准，绝不再发 aligned 假绿
             return {
                 "enabled": False,
                 "reason": "no_official_rule",
-                "aligned": True,
+                "aligned": False,
                 "flag_key": flag_key,
                 "env_code": env_code,
                 "subject_key": subject,
+                **calib,
             }
         percent_hit = eval_percent(subject, int(rule["percent"]), flag_key)
         cohort_hit = False
@@ -93,9 +104,12 @@ def evaluate(body: EvalIn, authorization: str | None = Header(default=None)):
             "percent_hit": percent_hit,
             "cohort_hit": cohort_hit,
             "version": rule["version"],
+            # 已校准须时区在：空时区环境排期推进后也报不出假绿
+            "aligned": tz_calibrated,
             "flag_key": flag_key,
             "env_code": env_code,
             "subject_key": subject,
+            **calib,
         }
 
 

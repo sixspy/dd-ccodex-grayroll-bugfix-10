@@ -34,7 +34,15 @@ CREATE TABLE IF NOT EXISTS environments(
   id INTEGER PRIMARY KEY,
   code TEXT UNIQUE NOT NULL,
   title TEXT NOT NULL,
-  risk_level INTEGER NOT NULL DEFAULT 1
+  risk_level INTEGER NOT NULL DEFAULT 1,
+  timezone TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS env_cross_region(
+  env_id INTEGER PRIMARY KEY REFERENCES environments(id),
+  eligible INTEGER NOT NULL DEFAULT 0,
+  official INTEGER NOT NULL DEFAULT 1,
+  updated_at REAL NOT NULL DEFAULT 0,
+  updated_by TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS flags(
   id INTEGER PRIMARY KEY,
@@ -194,8 +202,13 @@ def seed(conn: sqlite3.Connection) -> None:
         return
     for e in _load("environments.json"):
         conn.execute(
-            "INSERT INTO environments(id, code, title, risk_level) VALUES(?,?,?,?)",
-            (e["id"], e["code"], e["title"], e["risk_level"]),
+            "INSERT INTO environments(id, code, title, risk_level, timezone) VALUES(?,?,?,?,?)",
+            (e["id"], e["code"], e["title"], e["risk_level"], e.get("timezone", "")),
+        )
+        conn.execute(
+            "INSERT OR IGNORE INTO env_cross_region(env_id, eligible, official, updated_at, updated_by) "
+            "VALUES(?,0,1,0,'')",
+            (e["id"],),
         )
     for f in _load("flags.json"):
         conn.execute(
@@ -279,8 +292,28 @@ def seed(conn: sqlite3.Connection) -> None:
     conn.execute("INSERT INTO experiment_bridge_stub(id, note) VALUES(1, ?)", ("实验平台桥接空桩未接通",))
 
 
+def _migrate(conn: sqlite3.Connection) -> None:
+    """老库补齐：environments.timezone 列与 env_cross_region 正式资格账（幂等）。"""
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(environments)").fetchall()}
+    if "timezone" not in cols:
+        conn.execute("ALTER TABLE environments ADD COLUMN timezone TEXT NOT NULL DEFAULT ''")
+        for e in _load("environments.json"):
+            if e.get("timezone"):
+                conn.execute(
+                    "UPDATE environments SET timezone=? WHERE code=? AND timezone=''",
+                    (e["timezone"], e["code"]),
+                )
+    for row in conn.execute("SELECT id FROM environments").fetchall():
+        conn.execute(
+            "INSERT OR IGNORE INTO env_cross_region(env_id, eligible, official, updated_at, updated_by) "
+            "VALUES(?,0,1,0,'')",
+            (row["id"],),
+        )
+
+
 def init_db() -> None:
     with connect() as conn:
         conn.executescript(SCHEMA)
+        _migrate(conn)
         seed(conn)
         conn.commit()
